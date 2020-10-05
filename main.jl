@@ -75,6 +75,9 @@ function calc_lamhes(x ,y)
     return (pp + ps)/2 - sqrt(pm^2 + (pp - ps)^2/4), (pp + ps)/2 + sqrt(pm^2 + (pp - ps)^2/4)
 end
 
+##########3
+#make some plots specific for my CGN project
+##########
 
 function plot_cut(gx, gys)
     orders   = map(gyi -> calc_order_parameters(gx, gyi)    , gys )
@@ -97,212 +100,257 @@ p1, p2, p3 = plot_cut(2., range(1.2, stop = 1.3, length = 100))
 out = plot(p1,p2,p3, size = (2000, 1000))
 savefig(out, "cut_MF")
 
-####################################
-####################################
-####################################
-
-
-
+##################################################################
+##################################################################
+##################################################################
 
 mutable struct state
     length::Int
 
-    sigma_op_i
-       pi_op_i
+    sigma_op
+       pi_op
 
-    sigma_i::Array{Float64}
-       pi_i::Array{Float64}
+    sigma::Array{Float64}
+       pii::Array{Float64}
 end
+function sigma(state, i,j,k)
+    return state.sigma[mod1(i, state.length)]
+end
+function sigma!(state, i,j,k, new)
+    state.sigma[mod1(i, state.length)] = new
+end
+function sigma_op(state, i,j,k)
+    return state.sigma_op[mod1(i, state.length)]
+end
+function sigma(state, i,j,k,l)
+    return 0.5*(sigma(state, i,j,k)-sigma(state, j,k,l))
+end
+
+function pii(state, i,j)
+    return state.pii[mod1(i, state.length)]
+end
+function pii!(state, i,j, new)
+    state.pii[mod1(i, state.length)] = new
+end
+function pii_op(state, i,j)
+    return state.pi_op[mod1(i, state.length)]
+end
+function pii(state, i,j,k)
+    return 0.5*(pii(state, i,j)-pii(state, j,k))
+end
+
 function init_state(length, sigma_0, pi_0; BC = "triv")
-    @assert length > 2
-    @assert iseven(length)
-    sigmas = [range(sigma_0, sigma_0, length=length)...]
-    sigma_ops = []
-    for i in 1:Int(floor(length/2))
-        sigmas[i] = (sigmas[i]*(-1)^i)
-    end
-    if BC == "sigma_kink"
-        for i in Int(floor(length/2))+1:length
-            sigmas[i] = sigmas[i]*(-1)^(i+1)
+    sis = Float64[]
+    pis = Float64[]
+    if BC == "triv"
+        for loc in 1:length
+            push!(sis, sigma_0*(-1)^loc)
+            push!(pis,    pi_0*(-1)^loc)
+        end
+    elseif BC == "pi_kink"
+        for loc in 1:length
+            push!(sis, sigma_0*(-1)^loc)
+        end
+        for loc in 1:length/2-1
+            push!(pis, pi_0*(-1)^loc)
+        end
+        push!(pis, 0.)
+        for loc in length/2+1:length-1
+            push!(pis, pi_0*(-1)^(loc+1))
+        end
+        push!(pis, 0.)
+    elseif BC == "sigma_kink"
+        for loc in 1:length/2-2
+            push!(sis, sigma_0*(-1)^loc)
+        end
+        push!(sis, 0.)
+        for loc in length/2:length-2
+            push!(sis, sigma_0*(-1)^(loc+1))
+        end
+        push!(sis, 0.)
+        push!(sis, sigma_0)
+        for loc in 1:length
+            push!(pis,    pi_0*(-1)^loc)
         end
     else
-        for i in Int(floor(length/2))+1:length
-            sigmas[i] = sigmas[i]*(-1)^(i)
-        end
+        throw("invalid BC errors")
     end
 
-    for i in 1:length-2
-        tmp = zeros(length, length) + im*zeros(length, length)
-        tmp[i,   i+1] = -0.5*im
-        tmp[i+1, i  ] =  0.5*im
-        tmp[i+1, i+2] =  0.5*im
-        tmp[i+2, i+1] = -0.5*im
-        push!(sigma_ops, tmp)
+    si_ops = []
+    for loc in 1:length
+        tmp = ComplexF64.(zeros(length, length))
+        tmp[mod1(loc  , length),mod1(loc+1, length)] = -0.5*im
+        tmp[mod1(loc+1, length),mod1(loc+2, length)] = +0.5*im
+        tmp += tmp'
+        push!(si_ops, tmp)
     end
-    tmp = zeros(length, length) + im*zeros(length, length)
-    tmp[length-1, length] = -0.5*im
-    tmp[length, length-1] =  0.5*im
-    tmp[length, 1] =  0.5*im
-    tmp[1, length] = -0.5*im
-    push!(sigma_ops, tmp)
-    tmp = zeros(length, length) + im*zeros(length, length)
-    tmp[length, 1] = -0.5*im
-    tmp[1, length] =  0.5*im
-    tmp[1, 2] =  0.5*im
-    tmp[2, 1] = -0.5*im
-    push!(sigma_ops, tmp)
 
-    pis    = [range(pi_0, pi_0, length=length)...]
     pi_ops = []
-    for i in 1:Int(floor(length/2))
-        pis[i] = pis[i]*(-1)^i
-    end
-    if BC == "pi_kink"
-        for i in Int(floor(length/2))+1:length
-            pis[i] = pis[i]*(-1)^(i+1)
-        end
-    else
-        for i in Int(floor(length/2))+1:length
-            pis[i] = pis[i]*(-1)^(i)
-        end
-    end
-
-    for i in 1:length-1
-        tmp = zeros(length, length) + im*zeros(length, length)
-        tmp[i  , i  ] =  1
-        tmp[i+1, i+1] = -1
+    for loc in 1:length
+        tmp = ComplexF64.(zeros(length, length))
+        tmp[mod1(loc  , length),mod1(loc  , length)] =  1.
+        tmp[mod1(loc+1, length),mod1(loc+1, length)] = -1.
         push!(pi_ops, tmp)
     end
-    tmp = zeros(length, length) + im*zeros(length, length)
-    tmp[length  , length  ] =  1
-    tmp[1, 1] = -1
-    push!(pi_ops, tmp)
-    return state(length, sigma_ops, pi_ops, sigmas, pis)
+
+    return state(length, si_ops, pi_ops, sis, pis)
 end
-function get_sigma(state::state, i::Int64, j::Int64, k::Int64)
-    @assert i+1 == j
-    @assert j+1 == k
-    return state.sigma_i[mod1(i, state.length)]
-end
-function get_pi(state::state, i::Int64, j::Int64)
-    return state.pi_i[mod1(i, state.length)]
-end
-function construct_H(state, gx, gy)
+function eval_fluctuations(state, gx, gy)
     L = state.length
-    #first we construct the hamiltonian and diagonalize it
-    H = zeros(L, L) + im*zeros(L, L)
+
+    H = make_H(state, gx, gy)
+    eigs = eigen(H)
+    eigvals = eigs.values
+    v       = eigs.vectors
+    indmax = findlast(xi -> xi<=0., eigvals)
+    v = v'
+    #at this point we have that eigvecs'*diagm(eigvals)*eigvecs = H
+    fluc_sigma = Float64[]
+    fluc_pi    = Float64[]
     for i in 1:L
-        H[i,i] += gy*0.5*(get_pi(state, i-1,i)-get_pi(state, i, i+1)) + gx*get_sigma(state, i-1,i,i+1)^2/2 + gy*get_pi(state, i, i+1)^2/2
+        tmp = real(sum(diag(v*sigma_op(state, i,i+1, i+2)^2*v')[1:indmax]))
+        push!(fluc_sigma, tmp)
+
+        tmp = real(sum(diag(v*pii_op(state, i,i+1)^2*v')[1:indmax]))
+        push!(fluc_pi, tmp)
     end
-    for i in 1:L-1
-        H[i, i+1] = -im*(1+0.5*gx*0.5*(get_sigma(state,i-1,i,i+1)-get_sigma(state, i,i+1,i+2)))
-        H[i+1, i] = H[i, i+1]'
-    end
-    H[1, L] = im*(1+0.5*gx*0.5*(get_sigma(state,L-1,L,L+1)-get_sigma(state, L,L+1,L+2)))
-    H[L, 1] = H[1, L]'
-    return H
+    return fluc_sigma, fluc_pi
 end
-function construct_H_blocks(state, gx, gy)
-    L = state.length
-    out = []
-    for loc in 1:L-1
-        tmp = zeros(L, L) + im*zeros(L, L)
-        tmp[loc,loc]     += 0.5*(gy*0.5*(get_pi(state, loc-1,loc)-get_pi(state, loc  , loc+1)) + gx*get_sigma(state, loc-1,loc  ,loc+1)^2/2 + gy*get_pi(state, loc  , loc+1)^2/2)
-        tmp[loc+1,loc+1] += 0.5*(gy*0.5*(get_pi(state, loc,loc+1)-get_pi(state, loc+1, loc+2)) + gx*get_sigma(state, loc  ,loc+1,loc+2)^2/2 + gy*get_pi(state, loc+1, loc+2)^2/2)
-
-        tmp[loc, loc+1] = -im*(1+0.5*gx*0.5*(get_sigma(state,loc-1,loc,loc+1)-get_sigma(state, loc,loc+1,loc+2)))
-        tmp[loc+1, loc] = tmp[loc, loc+1]'
-        push!(out, tmp)
+function make_H(state, gx, gy)
+    L=state.length
+    out = ComplexF64.(zeros(L,L))
+    for i in 1:L
+        out[mod1(i,L)  ,mod1(i,L)]   +=      gy*pii(state, i-1,i,i+1)
+        out[mod1(i+1,L),mod1(i  ,L)] +=      im+0.5*im*gx*sigma(state, i-1,i,i+1,i+2)
+        out[mod1(i  ,L),mod1(i+1,L)] += conj(im+0.5*im*gx*sigma(state, i-1,i,i+1,i+2)  )
     end
-    tmp = zeros(L, L) + im*zeros(L, L)
-    tmp[1,1] += 0.5*(gy*0.5*(get_pi(state, 0,1)-get_pi(state, 1, 2)) + gx*get_sigma(state, 0,1  ,2)^2/2 + gy*get_pi(state, 1  , 2)^2/2)
-    tmp[L,L] += 0.5*(gy*0.5*(get_pi(state, L-1,L)-get_pi(state, L, L+1)) + gx*get_sigma(state, L-1  ,L,L+1)^2/2 + gy*get_pi(state, L, L+1)^2/2)
-    tmp[1, L] = im*(1+0.5*gx*0.5*(get_sigma(state,L-1,L,L+1)-get_sigma(state, L,L+1,L+2)))
-    tmp[L, 1] = tmp[1, L]'
-    push!(out, tmp)
-
     return out
 end
 function update_state(state, gx, gy)
     L = state.length
-    H = construct_H(state, gx, gy)
-    decomp = eigen(H)
-    eigvals = decomp.values
-    v       = decomp.vectors
 
-    energy = sum(eigvals[1:Int(floor(L/2))])
+    H = make_H(state, gx, gy)
+    eigs = eigen(H)
+    eigvals = eigs.values
+    v       = eigs.vectors
+    indmax = findlast(xi -> xi<=0., eigvals)
     v = v'
     #at this point we have that eigvecs'*diagm(eigvals)*eigvecs = H
-    error = 0.
     for i in 1:L
-        tmp = real(sum(diag(v*state.sigma_op_i[i]*v')[1:Int(floor(L/2))]))
-        error += abs(state.sigma_i[i] - tmp)
-        state.sigma_i[i] = tmp
+        tmp = real(sum(diag(v*sigma_op(state, i,i+1, i+2)*v')[1:indmax]))
+        sigma!(state, i, i+1, i+2, tmp)
 
-        tmp = real(sum(diag(v*state.pi_op_i[i]*v')[1:Int(floor(L/2))]))
-        error += abs(state.pi_i[i] - tmp)
-        state.pi_i[i] = tmp
+        tmp = real(sum(diag(v*pii_op(state, i,i+1)*v')[1:indmax]))
+        pii!(state, i, i+1, tmp)
     end
-    return state, energy, error
+    energy = sum(eigvals[1:indmax]) + gx/4*norm(state.sigma)^2 + gy/4*norm(state.pii)^2
+
+    return state, energy
 end
-function energy_state(state, gx, gy)
-    L = state.length
-    H  = construct_H(state, gx, gy)
-    Hi = construct_H_blocks(state, gx, gy)
-    decomp = eigen(H)
-    eigvals = decomp.values
-    v       = decomp.vectors
-    v = v'
+function plot_state(gx, gy, state; BC = "triv")
+    s0 , p0, _ = calc_order_parameters(gx, gy)
+    iis = Int.([range(0, stop=state.length, length=state.length+1)...])
+    if BC == "triv"
+        a = plot(title = "order parameters")
+        hline!([s0], label = "vaccum expetance simga", color = "blue", linestyle = :dot)
+        hline!([p0], label = "vaccum expetance  pi", color = "orange", linestyle = :dot)
 
-    energy = sum(eigvals[1:Int(floor(L/2))])
-    energies = Float64[]
-    for i in 1:L-1
-        push!(energies, 0.5*real(sum(diag(v*Hi[i]*v')[1:Int(floor(L/2))]))+0.5*real(sum(diag(v*Hi[i+1]*v')[1:Int(floor(L/2))])))
-    end
-        push!(energies, 0.5*real(sum(diag(v*Hi[L]*v')[1:Int(floor(L/2))]))+0.5*real(sum(diag(v*Hi[1]*v')[1:Int(floor(L/2))])))
-    return energy, energies
-end
-function plot_state(state::state, gx, gy; BC = "trivial")
-    is = Int[range(1, state.length, length=state.length)...]
-    eref = 0.5*calc_energy(gx, gy)
-    _, energies = energy_state(state, gx, gy)
-    s0, p0 = calc_order_parameters(gx, gy)
+        scatter!(iis.+0.5, map(ii-> (-1)^ii*pii(state, ii, ii+1),iis), color = "orange", label = L"pi_{i, i+1}" )
+        scatter!(iis    , map(ii-> (-1)^(ii-1)*sigma(state, ii-1, ii, ii+1),iis), color = "blue"  , label = L"\sigma_{i-1, i, i+1}")
 
-    @show eref
-    @show energies
 
-    a = plot(xlabel = "i")
-    hline!([s0], color = "orange", label = "", linestyle = :dot)
-    hline!([p0], color = "blue"  , label = "", linestyle = :dot)
-    if BC == "sigma_kink"
-        hline!([-s0], color = "orange", label = "", linestyle = :dot)
+        return plot(a, size = (2000, 1000))
+    elseif BC == "fluc_triv"
+        a = plot(title = "fluctuations of the order parameters")
+        hline!([s0], label = "vaccum expetance simga", color = "blue", linestyle = :dot)
+        hline!([p0], label = "vaccum expetance  pi", color = "orange", linestyle = :dot)
+
+        fs, fp = eval_fluctuations(state, gx, gy)
+
+        scatter!(iis.+0.5, fp, color = "orange", label = L"pi^2_{i, i+1}" )
+        scatter!(iis     , fs, color = "blue"  , label = L"\sigma^2_{i-1, i, i+1}")
+
+
+        return plot(a, size = (2000, 1000))
     elseif BC == "pi_kink"
-        hline!([-p0], color = "blue"  , label = "", linestyle = :dot)
-    end
-    plot!(is, map(ii -> (-1)^ii*get_sigma(state,ii, ii+1, ii+2 ), is) , color = "orange", label = L"<\sigma_{i,i+1,i+2}>")
-    plot!(is, map(ii -> abs(0.5*(get_pi(state,ii-1, ii)-get_pi(state,ii,ii+1)  )), is) , color = "blue"  , label = L"<\pi_{i,i+1}>")
+        a = plot(title = "order parameters")
+        hline!([s0], label = "vaccum expetance simga", color = "blue", linestyle = :dot)
+        hline!([p0, -p0], label = "vaccum expetance  pi", color = "orange", linestyle = :dot)
+        vline!([0.5, state.length/2+0.5, state.length+0.5], color = "red", label = "kink locations")
 
-    de = abs(minimum(energies)-maximum(energies))+0.1
-    b = plot(xlabel = "", ylims = (eref-de, eref+de))
-    hline!([eref], color = "red", linestyle = :dot, label = "")
-    plot!(b, is, energies, color = "red", label = "")
+        plot!(iis.+0.5, map(ii-> (-1)^ii*pii(state, ii, ii+1),iis), color = "orange", label = L"pi_{i, i+1}", marker = :dot )
+        plot!(iis    , map(ii-> (-1)^(ii-1)*sigma(state, ii-1, ii, ii+1),iis), color = "blue"  , label = L"\sigma_{i-1, i, i+1}", marker = :dot)
 
-    return a, b
-end
-function find_state(L, gx, gy,tol ;BC="trivial")
-    s0, p0 = calc_order_parameters(gx, gy)
-    init = init_state(L, s0, p0; BC = BC);
-    error = Inf
-    energy = Inf
-    iter = 0
-    while error > tol
-        init, energy, error = update_state(init, gx, gy)
-        iter += 1
-        @show iter, error
+        return plot(a, size = (2000, 1000))
+    elseif BC == "sigma_kink"
+        a = plot(title = "order parameters")
+        hline!([s0, -s0], label = "vaccum expetance simga", color = "blue", linestyle = :dot)
+        hline!([p0], label = "vaccum expetance  pi", color = "orange", linestyle = :dot)
+        vline!([0., state.length/2, state.length], color = "red", label = "kink locations")
+
+        plot!(iis.+0.5, map(ii-> (-1)^ii*pii(state, ii, ii+1),iis), color = "orange", label = L"pi_{i, i+1}", marker = :dot )
+        plot!(iis    , map(ii-> (-1)^(ii-1)*sigma(state, ii-1, ii, ii+1),iis), color = "blue"  , label = L"\sigma_{i-1, i, i+1}", marker = :dot)
+
+        return plot(a, size = (2000, 1000))
+    else
+        throw("BC invalid")
     end
-    return init, energy
 end
 
-gs, energy = find_state(100, 1., 0., 0.001; BC = "trivial")
-order_plot, energy_plot = plot_state(gs, 1., 0.; BC = "trivial")
-display(plot(order_plot, energy_plot))
+function make_datapoint(gx, gy, L; tol = 1e-2)
+    @assert iseven(L)
+
+    s0, p0, _ = calc_order_parameters(gx, gy)
+    e0 = L/2*calc_energy(gx, gy)
+
+    triv = init_state(L, s0, p0; BC = "triv")
+    terr = Inf
+    tene = Inf
+    while terr > tol
+        triv, tene_n = update_state(triv, gx, gy)
+        terr = abs(tene-tene_n)
+        tene = tene_n
+        @show tene, terr
+    end
+    plot_triv = plot_state(gx, gy, triv; BC = "triv")
+    plot_fluc = plot_state(gx, gy, triv; BC = "fluc_triv")
+    plot!(plot_triv, title = "E_{ref} = $(tene) vs $(e0)")
+    display(plot_triv)
+
+    piki = init_state(L, s0, p0; BC = "pi_kink")
+    perr = Inf
+    pene = Inf
+    while perr > tol
+        piki, pene_n = update_state(piki, gx, gy)
+        perr = abs(pene-pene_n)
+        pene = pene_n
+        @show pene, perr
+    end
+    plot_piki = plot_state(gx, gy, piki; BC = "pi_kink")
+    plot!(plot_piki, title = "E = $(pene-tene)")
+    display(plot_piki)
+
+    siki = init_state(L, s0, p0; BC = "sigma_kink")
+    serr = Inf
+    sene = Inf
+    while serr > tol
+        siki, sene_n = update_state(siki, gx, gy)
+        serr = abs(sene-sene_n)
+        sene = sene_n
+        @show sene, serr
+    end
+    plot_siki = plot_state(gx, gy, siki; BC = "sigma_kink")
+    plot!(plot_siki, title = "E_ref = $(sene-tene)")
+    display(plot_siki)
+    @show sene
+
+    return plot_triv, plot_piki, plot_siki, plot_fluc, tene, pene, sene
+end
+
+
+
+
+ref,piking,sigmakink,flucplot,_=make_datapoint(4.5, 1.5, 100; tol = 1e-12)
+savefig(plot(ref, piking, sigmakink, flucplot), "MF_kink")
+
+
