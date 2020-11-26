@@ -1,17 +1,16 @@
-using Plots
-pyplot()
 using QuadGK
 using Optim
 using Roots
 using LsqFit
 using LaTeXStrings
 using LinearAlgebra
+using FileIO
 
 ######################
 #Note!:
-#       x is coupling of sigma
-#       y is coupling of pi
-#       m is mass (perturbation)
+#       x,gx is coupling of sigma
+#       y,gy is coupling of pi
+#       m,mo is mass (perturbation)
 #Note Note:
 #   Daan defines x as g^2 <- independent of N
 ######################
@@ -23,7 +22,6 @@ function sc_energy(s, p, x, y, m)
     a =  (x*s^2+y*p^2)/2 - quadgk( k -> 1/(2*pi)*sc_ek(s, p, x, y, m, k)   , -pi, pi, rtol=1e-12)[1]
     return a
 end
-
 function sc_dsigma(s, p, x, y, m)
     return x*s - (x*s-m)*x*quadgk(k -> (cos(k/2)^2)/(2*pi*sc_ek(s, p, x, y, m, k)), -pi, pi, rtol=1e-12)[1]
 end
@@ -103,7 +101,6 @@ function calc_lamhes(x ,y)
     ps = sc_ps(sigma, pi, x, y, m)
     return (pp + ss)/2 - sqrt(ps^2 + (pp - ss)^2/4), (pp + ss)/2 + sqrt(ps^2 + (pp - ss)^2/4)
 end
-
 function plot_cut(x, ys, ms)
     if length(ys) == 1
         orders   = map(mi -> calc_order_parameters(x, ys, mi), ms )
@@ -150,13 +147,7 @@ function plot_cut(x, ys, ms)
         println("Not yet implemented")
         # need 3D plot
     end
-
 end
-
-#p1,p2,p3,p4 = plot_cut(1.3, 0,range(-0.1, stop = 0.1, length = 100))
-#out = plot(p1,p2,p3,p4, size = (2000, 1000))
-#savefig(out, "test_cut_MF.pdf")
-
 ####################################
 ####################################
 ####################################
@@ -170,32 +161,52 @@ mutable struct state
        pii::Array{Float64}
        mis::Array{Float64}
 end
-function sigma(state, i,j,k)
+function sigma(state::state, i,j,k)
     return state.sigma[mod1(i, state.length)]
 end
-function sigma!(state, i,j,k, new)
+function sigma!(state::state, i,j,k, new)
     state.sigma[mod1(i, state.length)] = new
 end
-function sigma_op(state, i,j,k)
+function sigma_op(state::state, i,j,k)
     return state.sigma_op[mod1(i, state.length)]
 end
-function sigma(state, i,j,k,l)
+function sigma(state::state, i,j,k,l)
     return 0.5*(sigma(state, i,j,k)-sigma(state, j,k,l))
 end
-
-function pii(state, i,j)
+function pii(state::state, i,j)
     return state.pii[mod1(i, state.length)]
 end
-function pii!(state, i,j, new)
+function pii!(state::state, i,j, new)
     state.pii[mod1(i, state.length)] = new
 end
-function pii_op(state, i,j)
+function pii_op(state::state, i,j)
     return state.pi_op[mod1(i, state.length)]
 end
-function pii(state, i,j,k)
+function pii(state::state, i,j,k)
     return 0.5*(pii(state, i,j)-pii(state, j,k))
 end
-
+function calc_energy(state::state, vt,  gx, gy)
+    indmax = Int(state.length / 2)
+    Ht = make_H(state, gx, gy)
+    norms = gx/4*norm(state.sigma)^2 + gy/4*norm(state.pii)^2
+    energy = real(sum(diag(vt'*Ht*vt)[1:indmax]))+norms
+    kinetic = real(sum(diag(vt'*make_K(state.length)*vt)[1:indmax]))
+    #return energy, gx/4*norm(state.sigma)^2, gy/4*norm(state.pii)^2
+    return kinetic, norms, energy - kinetic - norms
+end
+function calc_orderp_fluc(state::state, vt)
+    sigmas_sq, pis_sq = [], []
+    indmax = Int(state.length / 2)
+    for i in 1:L
+        tmp = real(sum(diag(vt'*sigma_op(state, i,i+1, i+2)*sigma_op(state, i,i+1, i+2)*vt)[1:indmax]))
+        push!(sigmas_sq, tmp)
+        tmp = real(sum(diag(vt'*pii_op(state, i,i+1, i+2)*pii_op(state, i,i+1, i+2)*vt)[1:indmax]))
+        push!(pis_sq, tmp)
+    end
+    sigma_fluc = state.sigmas .^ 2 - sigmas_sq
+    pi_fluc = state.pii .^ 2 - pis_sq
+    return sigma_fluc,pi_fluc
+end
 function init_state(length, sigma_0, pi_0; BC = "triv", mis = Float64[])
     sis = Float64[]
     pis = Float64[]
@@ -252,6 +263,43 @@ function init_state(length, sigma_0, pi_0; BC = "triv", mis = Float64[])
 
     return state(length, si_ops, pi_ops, sis, pis, mis)
 end
+function create_ops(length)
+    si_ops = []
+    for loc in 1:length
+        tmp = ComplexF64.(zeros(length, length))
+        tmp[mod1(loc  , length),mod1(loc+1, length)] = -0.5*im
+        tmp[mod1(loc+1, length),mod1(loc+2, length)] = +0.5*im
+        tmp += tmp'
+        push!(si_ops, tmp)
+    end
+
+    pi_ops = []
+    for loc in 1:length
+        tmp = ComplexF64.(zeros(length, length))
+        tmp[mod1(loc  , length),mod1(loc  , length)] =  1.
+        tmp[mod1(loc+1, length),mod1(loc+1, length)] = -1.
+        push!(pi_ops, tmp)
+    end
+    return si_ops,pi_ops
+end
+function saveMF(filename, state, v, energy, t)
+    tosave = Dict(   "sigmas"    => state.sigma
+                    ,"pis"       => state.pii
+                    ,"mis"       => state.mis
+                    ,"v"         => v
+                    ,"energy"    => energy
+                    ,"length"     => state.length
+                    )
+    save(filename,tosave)
+    println("State at t = $(t) has been saved")
+end
+function loadMF(filename)
+    toload = load(filename)
+    L = toload["length"]
+    si_ops, pi_ops = create_ops(L)
+    loaded_state = state(L, si_ops, pi_ops, toload["sigmas"], toload["pis"], toload["mis"]);
+    return loaded_state, toload["v"], toload["energy"]
+end
 function eval_fluctuations(state, gx, gy)
     L = state.length
 
@@ -273,7 +321,7 @@ function eval_fluctuations(state, gx, gy)
     end
     return fluc_sigma, fluc_pi
 end
-function make_H(state, gx, gy)
+function make_H(state::state, gx, gy)
     L=state.length
     out = ComplexF64.(zeros(L,L))
     for i in 1:L
@@ -283,7 +331,15 @@ function make_H(state, gx, gy)
     end
     return out
 end
-function update_state(state, gx, gy)
+function make_K(L)
+    out = ComplexF64.(zeros(L,L))
+    for i in 1:L
+        out[mod1(i+1,L),mod1(i  ,L)] +=      im
+        out[mod1(i  ,L),mod1(i+1,L)] +=     -im
+    end
+    return out
+end
+function update_state(state::state, gx, gy)
     L = state.length
 
     H = make_H(state, gx, gy)
@@ -305,20 +361,11 @@ function update_state(state, gx, gy)
 
     return state, energy
 end
-function evolve_state(dt, state, v, gx, gy, tol)
+function evolve_state(dt, state::state, v, gx, gy)
     L = state.length
-
+    indmax = Int(L/2)
     H = make_H(state, gx, gy)
-    eigs = eigen(H)
-    eigvals = eigs.values
-    expiHt = exp(-im*dt*H)
-    #expiHt = exp(-im*dt*make_H(state, gx, gy))
-    indmax = findlast(xi -> xi<=0., eigvals)
-    #evolved_v = v*diagm(1.0 .-im*dt.*eigvals)
-    evolved_v = expiHt*v
-    #@show maximum(real(expiHt)),maximum(imag(expiHt))
-    #@show diag(expiHt-I)[1:20]
-    #@show maximum(real.(evolved_v.-v)),maximum(imag.(evolved_v.-v))
+    evolved_v = exp(-im*dt*H)*v
     for i in 1:L
         tmp = real(sum(diag(evolved_v'*sigma_op(state, i,i+1, i+2)*evolved_v)[1:indmax]))
         sigma!(state, i, i+1, i+2, tmp)
@@ -326,9 +373,8 @@ function evolve_state(dt, state, v, gx, gy, tol)
         tmp = real(sum(diag(evolved_v'*pii_op(state, i,i+1)*evolved_v)[1:indmax]))
         pii!(state, i, i+1, tmp)
     end
-    energy = sum(eigvals[1:indmax]) + gx/4*norm(state.sigma)^2 + gy/4*norm(state.pii)^2
-
-    return state, energy, evolved_v, eigvals
+    energy = sum(calc_energy(state, evolved_v, gx, gy))
+    return state, energy, evolved_v
 end
 function plot_state(gx, gy, m, state; BC = "triv")
     s0 , p0, _ , s0_false= calc_order_parameters(gx, gy, m)
@@ -383,7 +429,6 @@ function plot_state(gx, gy, m, state; BC = "triv")
         throw("BC invalid")
     end
 end
-
 function make_datapoint(gx, gy, L; tol = 1e-2)
     @assert iseven(L)
 
@@ -433,8 +478,7 @@ function make_datapoint(gx, gy, L; tol = 1e-2)
 
     return plot_triv, plot_piki, plot_siki, plot_fluc, tene, pene, sene
 end
-
-function potential_trapping(gx, L, mo, trial_mo; tol = 1e-2)
+function potential_trapping(gx, L, mo, trial_mo; tol = 1e-5)
 
     function make_mis(L,mo)
         ms = []
@@ -464,8 +508,8 @@ function potential_trapping(gx, L, mo, trial_mo; tol = 1e-2)
         terr = abs(tene-tene_n)
         tene = tene_n
         @show tene, terr
-        plot_triv = plot_state(gx, gy, trial_mo, triv; BC = "triv")
-        display(plot_triv)
+        #plot_triv = plot_state(gx, gy, trial_mo, triv; BC = "triv")
+        #display(plot_triv)
     end
     s0, p0, _ = calc_order_parameters(gx, gy, mo)
     triv.mis = make_mis(L,mo)
@@ -478,11 +522,11 @@ function potential_trapping(gx, L, mo, trial_mo; tol = 1e-2)
         terr = abs(tene-tene_n)
         tene = tene_n
         @show tene, terr
-        plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
-        display(plot_triv)
+        #plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
+        #display(plot_triv)
     end
     triv.mis = [range(mo;stop=mo,length=L)...]
-    #return plot_triv,triv
+    return triv
 
     terr = Inf
     tene = Inf
@@ -491,45 +535,53 @@ function potential_trapping(gx, L, mo, trial_mo; tol = 1e-2)
         terr = abs(tene-tene_n)
         tene = tene_n
         @show tene, terr
-        plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
-        display(plot_triv)
+        #plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
+        #display(plot_triv)
     end
     plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
-    plot(plot_triv, title = "m = $(mo), t = 0")
-    return plot_triv,triv
+    #plot(plot_triv, title = "m = $(mo), t = 0")
+    return triv
 end
-
-function time_evolution(state, dt, N, gx, mo; tol = 1e-2)
+function initial_perturbation(PerturbationRange,gx, L, mo; tol=1e-14)
+    @assert iseven(L)
     gy = 0.
-    H = make_H(state, gx, gy)
-    eigs = eigen(H)
-    v       = eigs.vectors
-    prev_eigvals = eigs.values
-    state_plot = plot_state(gx, gy, mo, state; BC = "triv")
-    display(state_plot)
-    for step in 1:N
-        state, energy, v, eigvals = evolve_state(dt, state, v, gx, gy, tol)
-        @show maximum(prev_eigvals.-eigvals)
-        prev_eigvals = eigvals
-        state_plot = plot_state(gx, gy, mo, state; BC = "triv")
-        display(state_plot)
-        @show (step,energy)
-    end
-    state_plot = plot_state(gx, gy, mo, state; BC = "triv")
-    plot(state_plot, title = "t=$(N*dt), dt=$(dt)")
-    return state_plot,state
-end
+    s0, p0, _ ,s0_false = calc_order_parameters(gx, gy, mo)
+    triv = init_state(L, s0_false, p0; BC = "triv", mis = [range(mo;stop=mo,length=L)...])
 
-#ref,piking,sigmakink,flucplot,_=make_datapoint(4.5, 1.5, 100; tol = 1e-12)
-#savefig(plot(ref, piking, sigmakink, flucplot), "MF_kink")
-#initial_state = potential_trapping(1.3^2,100, 0.05, 1.; tol = 1e-4)
-dts = [0.01,0.005,0.001]
-total_time = 0.1
-plot_initial,initial_state = potential_trapping(1.3^2,150, 0.005, 1.; tol = 1e-5);
-for dt in dts
-    N = Int(round(total_time/dt))
-    plot_final,final_state = time_evolution(deepcopy(initial_state),dt,N,1.3^2,0.005; tol = 1e-05);
-    #final_state = deepcopy(initial_state)
-    #plot_final,final_state = time_evolution(final_state,initial_state,dt,N,1.3^2,0.005);
-    savefig(plot(plot_initial,plot_final), "Test_evolution_$(dt).png")
+    terr = Inf
+    tene = Inf
+    while terr > tol
+        triv, tene_n = update_state(triv, gx, gy)
+        terr = abs(tene-tene_n)
+        tene = tene_n
+        @show tene, terr
+        #plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
+        #display(plot_triv)
+    end
+    for site in PerturbationRange
+        sigma!(triv,site,site+1,site+2,-sigma(triv,site,site+1,site+2))
+        #sigma!(triv,site,site+1,site+2,(-1)^(site)*s0)
+    end
+    #plot_triv = plot_state(gx, gy, mo, triv; BC = "triv")
+    #display(plot_triv)
+    #savefig(plot(plot_triv),"test.pdf")
+    return triv
+end
+function time_evolution(state, v, dt, N, gx, gy, mo, topfolder; starttime = 0.)
+    t = starttime
+    savestep = Int(round(0.1/dt))
+    for step in 1:N
+        state, energy, v = evolve_state(dt, state, v, gx, gy)
+        t = round(step*dt+starttime; digits=floor(Int, -log(dt)))
+        if step % savestep == 0.
+            name = topfolder*"MF__gx_$(gx)__gy_$(gy)__mo_$(mo)__t_$(t)__dt_$(dt).jld2"
+            saveMF(name, state, v, energy, t)
+        end
+        #state_plot = plot_state(gx, gy, mo, state; BC = "triv")
+        #display(state_plot)
+        @show (t,energy)
+    end
+    #state_plot = plot_state(gx, gy, mo, state; BC = "triv")
+    #plot(state_plot, title = "t=$(N*dt), dt=$(dt)")
+    return state
 end
